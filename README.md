@@ -22,7 +22,7 @@ Create a JSON file containing the configuration for your service:
 	"arguments": ["--arg1", "arg2", "--arg3=val3"],
 	"environment": { "ENV_KEY": "ENV_VALUE", "OTHER_ENV_KEY": "OTHER_ENV_VALUE" },
 	"stdout_log_file": "path\\to\\stdout.log",
-	"stderr_log_file": "path\\to\\stderr.log"
+	"stderr_log_file": "path\\to\\stderr.log",
 	"shutdown_grace_period_s": 30
 }
 ```
