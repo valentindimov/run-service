@@ -26,10 +26,19 @@ use windows::Win32::System::Threading::TerminateProcess;
 #[derive(Debug)]
 #[allow(dead_code)]
 pub enum ServiceRuntimeError {
-    Os(std::io::Error),
-    Service(windows_service::Error),
+    CanonicalizeConfigFilePath(std::io::Error),
+	ConfigFilePathHasNoParent,
+	SetCurrentDir(std::io::Error),
+
+	RegisterService(windows_service::Error),
+	ReportServiceStarting(windows_service::Error),
+	ReportServiceStarted(windows_service::Error),
+	ReportServiceStopping(windows_service::Error),
+	ReportServiceStopped(windows_service::Error),
+	
+	StartSubprocess(std::io::Error),
+	ProcessWatcherCrashed,
 	CouldNotKillChildProcess,
-    Other(String),
 }
 
 /// To explain this: Internally, several threads are separately running:
@@ -110,13 +119,11 @@ fn run_service_subprocess(
     // This is important in case the executable_path or working_dir paths are relative - then, they are relative to the location of the config file.
     std::env::set_current_dir(
         canonicalize(config_location)
-            .map_err(|e| ServiceRuntimeError::Os(e))?
+            .map_err(|e| ServiceRuntimeError::CanonicalizeConfigFilePath(e))?
             .parent()
-            .ok_or(ServiceRuntimeError::Other(
-                "Config location is equal to a filesystem root.".to_string(),
-            ))?,
+            .ok_or(ServiceRuntimeError::ConfigFilePathHasNoParent)?,
     )
-    .map_err(|e| ServiceRuntimeError::Os(e))?;
+    .map_err(|e| ServiceRuntimeError::SetCurrentDir(e))?;
 
     let working_dir = match config.working_dir {
         Some(s) => s,
@@ -139,10 +146,10 @@ fn run_service_subprocess(
 	}
 	
 	// Report that the service has started BEFORE starting the child process, so that we have no error-exit points between starting the child process and the ControlMessage waiting loop.
-	report_service_state(status_handle, ServiceState::Running, ServiceExitCode::Win32(0)).map_err(|e| ServiceRuntimeError::Service(e))?;
+	report_service_state(status_handle, ServiceState::Running, ServiceExitCode::Win32(0)).map_err(|e| ServiceRuntimeError::ReportServiceStarted(e))?;
 	
 	// Start the child process
-	let mut subproc = command.spawn().map_err(|e| ServiceRuntimeError::Os(e))?;
+	let mut subproc = command.spawn().map_err(|e| ServiceRuntimeError::StartSubprocess(e))?;
 	
 	// We keep a raw Windows HANDLE on the process, because a separate thread will wait on the Child and Child isn't cloneable.
 	// This is safe on Windows, because PIDs don't get reused as long as a HANDLE on the process is open.
@@ -213,9 +220,7 @@ fn run_service_subprocess(
                 unsafe {
                     _ = TerminateProcess(subproc_handle, 1);
                 }
-                return Err(ServiceRuntimeError::Other(
-                    "Process watcher crashed".to_string(),
-                ));
+                return Err(ServiceRuntimeError::ProcessWatcherCrashed);
             }
         }
     }
@@ -251,7 +256,7 @@ fn run_service(arguments: Vec<OsString>) -> Result<(), ServiceRuntimeError> {
 	// Register the event handler
     // For "own-process" services Windows doesn't care about the service name in this call - this saves us the need to know our own service name.
     let status_handle = service_control_handler::register("", event_handler)
-        .map_err(|e| ServiceRuntimeError::Service(e))?;
+        .map_err(|e| ServiceRuntimeError::RegisterService(e))?;
 	
 	// Report to the Windows service manager that we're starting up.
     report_service_state(
@@ -259,7 +264,7 @@ fn run_service(arguments: Vec<OsString>) -> Result<(), ServiceRuntimeError> {
         ServiceState::StartPending,
         ServiceExitCode::Win32(0),
     )
-    .map_err(|e| ServiceRuntimeError::Service(e))?;
+    .map_err(|e| ServiceRuntimeError::ReportServiceStarting(e))?;
 	
 	// Now execute the inner run_service_subprocess routine, which will start the child process then wait for it to finish (or kill it, if it gets a ControlMessage to do that)
     match run_service_subprocess( arguments, status_handle, config, &config_location, control_tx, control_rx) {
@@ -270,7 +275,7 @@ fn run_service(arguments: Vec<OsString>) -> Result<(), ServiceRuntimeError> {
 				ServiceState::Stopped,
 				ServiceExitCode::Win32(0),
 			)
-			.map_err(|e| ServiceRuntimeError::Service(e))?;
+			.map_err(|e| ServiceRuntimeError::ReportServiceStopped(e))?;
 		}
 		Err(_e) => {
 			// The inner function exited with an error - usually this means that either the child process could not start, or a fatal error happened in the service runner itself (not the child process).
@@ -280,7 +285,7 @@ fn run_service(arguments: Vec<OsString>) -> Result<(), ServiceRuntimeError> {
 				ServiceState::Stopped,
 				ServiceExitCode::Win32(1),
 			)
-			.map_err(|e| ServiceRuntimeError::Service(e))?;
+			.map_err(|e| ServiceRuntimeError::ReportServiceStopped(e))?;
 		}
     }
 	

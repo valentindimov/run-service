@@ -11,6 +11,8 @@ This runner is similar in purpose to other service managers like [NSSM](https://
 Install Rust via `rustup` and run `cargo build --release` in the root directory of the repository. You should find the binary under `target\release\run-service.exe`
 The binary should be stand-alone, and should not require the VC++ redistributables to be installed.
 
+The repository also contains an example service, which you can build with `cargo build --example dummy_service` and find under `target\debug\dummy_service.exe`. It can be used as a test service - each second, it prints to stdout, stderr, and to a file called `log.txt` in its working directory.
+
 ## How to Use
 Create a JSON file containing the configuration for your service:
 ```
